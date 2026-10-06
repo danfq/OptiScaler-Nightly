@@ -149,30 +149,32 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           $notes = @"
           > [!CAUTION]
           > This is an **unofficial automated nightly build** from the current upstream `master` branch. It may be unstable, incomplete, or broken. Do not ask the upstream OptiScaler maintainers for support with issues that only reproduce on this nightly fork.
-
+      
           **Upstream:** https://github.com/${{ env.UPSTREAM_REPOSITORY }}
           **Upstream commit:** `${{ steps.meta.outputs.upstream_sha }}`
           **Fork commit:** `${{ steps.meta.outputs.sha }}`
           **Built:** ${{ steps.meta.outputs.display_date }} UTC
-
+      
           For normal use, prefer the official stable OptiScaler releases unless you specifically need unreleased fixes from `master`.
           "@
-
+      
           gh release create "${{ steps.meta.outputs.tag }}" `
             "${{ steps.meta.outputs.archive }}" `
+            --repo "${{ github.repository }}" `
             --target "${{ steps.meta.outputs.sha }}" `
             --title "${{ steps.meta.outputs.title }}" `
             --notes $notes `
             --prerelease
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.meta.outputs.tag }}
-          path: ${{ steps.meta.outputs.archive }}
-          compression-level: 0
-          if-no-files-found: error
+      
+            - name: Upload workflow artifact
+              uses: actions/upload-artifact@v7
+              with:
+                name: ${{ steps.meta.outputs.tag }}
+                path: ${{ steps.meta.outputs.archive }}
+                compression-level: 0
+                if-no-files-found: error
