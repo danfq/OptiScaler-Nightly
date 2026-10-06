@@ -26,6 +26,12 @@
 >
 > **You are using these builds at your own risk.**
 
+<div align="center">
+  <a href="https://github.com/danfq/OptiScaler-Nightly/releases">
+    <img src="https://img.shields.io/badge/Download-Unofficial%20Nightly-purple?style=for-the-badge&logo=github&logoColor=white" alt="Unofficial nightly releases">
+  </a>
+</div>
+
 ## Table of Contents
 
 **1.** [**About**](#about)  
