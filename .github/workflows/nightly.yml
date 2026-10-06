@@ -1,0 +1,178 @@
+name: Nightly Sync & Release
+
+on:
+  schedule:
+    # Midnight UTC, every day
+    - cron: "0 0 * * *"
+
+  # Also lets us test it manually whenever we want.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: optiscaler-nightly
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: optiscaler/OptiScaler
+  BUILD_CONFIGURATION: Release
+
+jobs:
+  nightly:
+    name: Sync, build and release nightly
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+          submodules: false
+
+      - name: Sync with upstream master
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if (-not (git remote | Select-String -SimpleMatch "upstream")) {
+            git remote add upstream "https://github.com/${{ env.UPSTREAM_REPOSITORY }}.git"
+          }
+
+          git fetch upstream master --tags
+
+          # Pull upstream changes into our fork.
+          #
+          # "-X ours" only matters when an actual merge conflict occurs.
+          # In that case, keep our fork-specific README/workflow changes.
+          git merge --no-edit -X ours upstream/master
+
+          git push origin master
+
+      - name: Update submodules
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Extract version and nightly metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $resourceFile = ".\OptiScaler\resource.h"
+
+          if (-not (Test-Path $resourceFile)) {
+            throw "File not found: $resourceFile"
+          }
+
+          function Get-VersionComponent(
+            [string]$pattern,
+            [string]$replacement
+          ) {
+            $line = Get-Content $resourceFile |
+              Select-String -Pattern $pattern |
+              Select-Object -First 1
+
+            if (-not $line) {
+              throw "Version component not found: $pattern"
+            }
+
+            return ($line.Line -replace $replacement).Trim()
+          }
+
+          $major = Get-VersionComponent `
+            'VER_MAJOR_VERSION' `
+            '#define VER_MAJOR_VERSION\s+'
+
+          $minor = Get-VersionComponent `
+            'VER_MINOR_VERSION' `
+            '#define VER_MINOR_VERSION\s+'
+
+          $hotfix = Get-VersionComponent `
+            'VER_HOTFIX_VERSION' `
+            '#define VER_HOTFIX_VERSION\s+'
+
+          $build = Get-VersionComponent `
+            'VER_BUILD_NUMBER' `
+            '#define VER_BUILD_NUMBER\s+'
+
+          $version = "v$major.$minor.$hotfix-pre$build"
+
+          $date = (Get-Date).ToUniversalTime().ToString("yyyyMMdd")
+          $displayDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+
+          # The run number prevents collisions if we manually run it twice
+          # on the same day.
+          $tag = "$version-nightly-$date.${{ github.run_number }}"
+          $title = "OptiScaler $version-nightly ($displayDate)"
+          $archive = "OptiScaler_$version-nightly-$date.7z"
+
+          $sha = (git rev-parse HEAD).Trim()
+          $upstreamSha = (git rev-parse upstream/master).Trim()
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "date=$date" >> $env:GITHUB_OUTPUT
+          "display_date=$displayDate" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "title=$title" >> $env:GITHUB_OUTPUT
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "upstream_sha=$upstreamSha" >> $env:GITHUB_OUTPUT
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Build OptiScaler
+        shell: pwsh
+        run: |
+          msbuild /m `
+            /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
+            . `
+            /verbosity:minimal
+
+      - name: Package nightly build
+        shell: pwsh
+        run: |
+          $output = "${{ github.workspace }}\x64\Release\a"
+          $archive = "${{ github.workspace }}\${{ steps.meta.outputs.archive }}"
+
+          if (-not (Test-Path $output)) {
+            throw "Expected build output directory was not produced: $output"
+          }
+
+          7z a -r $archive "$output\*"
+
+      - name: Create GitHub pre-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          > [!CAUTION]
+          > This is an **unofficial automated nightly build** from the current upstream `master` branch. It may be unstable, incomplete, or broken. Do not ask the upstream OptiScaler maintainers for support with issues that only reproduce on this nightly fork.
+
+          **Upstream:** https://github.com/${{ env.UPSTREAM_REPOSITORY }}
+          **Upstream commit:** `${{ steps.meta.outputs.upstream_sha }}`
+          **Fork commit:** `${{ steps.meta.outputs.sha }}`
+          **Built:** ${{ steps.meta.outputs.display_date }} UTC
+
+          For normal use, prefer the official stable OptiScaler releases unless you specifically need unreleased fixes from `master`.
+          "@
+
+          gh release create "${{ steps.meta.outputs.tag }}" `
+            "${{ steps.meta.outputs.archive }}" `
+            --target "${{ steps.meta.outputs.sha }}" `
+            --title "${{ steps.meta.outputs.title }}" `
+            --notes $notes `
+            --prerelease
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.meta.outputs.tag }}
+          path: ${{ steps.meta.outputs.archive }}
+          compression-level: 0
+          if-no-files-found: error
