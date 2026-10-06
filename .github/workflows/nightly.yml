@@ -1,29 +1,20 @@
 name: Nightly Sync & Release
-
 on:
   schedule:
-    # Midnight UTC, every day
-    - cron: "0 0 * * *"
-
-  # Also lets us test it manually whenever we want.
-  workflow_dispatch:
-
+    - cron: 0 0 * * *
+  workflow_dispatch: null
 permissions:
   contents: write
-
 concurrency:
   group: optiscaler-nightly
   cancel-in-progress: false
-
 env:
   UPSTREAM_REPOSITORY: optiscaler/OptiScaler
   BUILD_CONFIGURATION: Release
-
 jobs:
   nightly:
     name: Sync, build and release nightly
     runs-on: windows-latest
-
     steps:
       - name: Check out fork
         uses: actions/checkout@v6
@@ -31,7 +22,6 @@ jobs:
           ref: master
           fetch-depth: 0
           submodules: false
-
       - name: Sync with upstream master
         shell: pwsh
         run: |
@@ -51,13 +41,11 @@ jobs:
           git merge --no-edit -X ours upstream/master
 
           git push origin master
-
       - name: Update submodules
         shell: pwsh
         run: |
           git submodule sync --recursive
           git submodule update --init --recursive
-
       - name: Extract version and nightly metadata
         id: meta
         shell: pwsh
@@ -121,10 +109,8 @@ jobs:
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "sha=$sha" >> $env:GITHUB_OUTPUT
           "upstream_sha=$upstreamSha" >> $env:GITHUB_OUTPUT
-
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
-
       - name: Build OptiScaler
         shell: pwsh
         run: |
@@ -132,7 +118,6 @@ jobs:
             /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
             . `
             /verbosity:minimal
-
       - name: Package nightly build
         shell: pwsh
         run: |
@@ -144,7 +129,6 @@ jobs:
           }
 
           7z a -r $archive "$output\*"
-
       - name: Create GitHub pre-release
         shell: pwsh
         env:
@@ -154,15 +138,15 @@ jobs:
           $notes = @"
           > [!CAUTION]
           > This is an **unofficial automated nightly build** from the current upstream `master` branch. It may be unstable, incomplete, or broken. Do not ask the upstream OptiScaler maintainers for support with issues that only reproduce on this nightly fork.
-      
+
           **Upstream:** https://github.com/${{ env.UPSTREAM_REPOSITORY }}
           **Upstream commit:** `${{ steps.meta.outputs.upstream_sha }}`
           **Fork commit:** `${{ steps.meta.outputs.sha }}`
           **Built:** ${{ steps.meta.outputs.display_date }} UTC
-      
+
           For normal use, prefer the official stable OptiScaler releases unless you specifically need unreleased fixes from `master`.
           "@
-      
+
           gh release create "${{ steps.meta.outputs.tag }}" `
             "${{ steps.meta.outputs.archive }}" `
             --repo "${{ github.repository }}" `
@@ -170,7 +154,7 @@ jobs:
             --title "${{ steps.meta.outputs.title }}" `
             --notes $notes `
             --prerelease
-      
+
             - name: Upload workflow artifact
               uses: actions/upload-artifact@v7
               with:
