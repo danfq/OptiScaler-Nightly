@@ -155,10 +155,10 @@ jobs:
             --notes $notes `
             --prerelease
 
-            - name: Upload workflow artifact
-              uses: actions/upload-artifact@v7
-              with:
-                name: ${{ steps.meta.outputs.tag }}
-                path: ${{ steps.meta.outputs.archive }}
-                compression-level: 0
-                if-no-files-found: error
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.meta.outputs.tag }}
+          path: ${{ steps.meta.outputs.archive }}
+          compression-level: 0
+          if-no-files-found: error
