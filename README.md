@@ -11,6 +11,21 @@
 </div>
 <br />
 
+> [!WARNING]
+> ## Unofficial nightly builds
+>
+> This repository is an **unofficial nightly-build fork of [OptiScaler](https://github.com/optiscaler/OptiScaler)**.
+>
+> Builds are automatically produced from the latest upstream `master` branch every day and may contain **unfinished, experimental, untested, or broken changes**.
+>
+> - These builds are **not official OptiScaler releases**.
+> - They may crash, regress, corrupt rendering, or behave differently from the latest stable release.
+> - Do **not** report nightly-specific issues to the upstream OptiScaler maintainers unless you have confirmed the same issue exists on an official build.
+> - For normal use, prefer the [official OptiScaler releases](https://github.com/optiscaler/OptiScaler/releases).
+> - Use these builds when you specifically need fixes or changes that have landed in upstream `master` but have not been released yet.
+>
+> **You are using these builds at your own risk.**
+
 ## Table of Contents
 
 **1.** [**About**](#about)  
