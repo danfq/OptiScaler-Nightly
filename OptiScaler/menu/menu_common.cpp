@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "menu_common.h"
+#include "PresentRateMeter.h"
 #include <inputs/FG/XeFG_Inputs_Dx12.h>
 
 #include "input/input_system.h"
@@ -1706,43 +1707,16 @@ void MenuCommon::Present()
         UpdateManualInput(_handle);
 }
 
-static std::atomic<bool> fgOutputPresents = false;
-static std::atomic<uint32_t> fgOutputPresentCount = 0;
-static double fgOutputLastSample = 0.0;
-static double fgOutputFrameTime = 0.0;
+static PresentRateMeter fgOutputPresentRate;
 
-// Streamline presents the real and the generated frames from different threads.
-// With flip metering they are submitted back to back and paced by the display, so the
-// frame time is averaged over all presents between menu frames instead of the last interval.
-void MenuCommon::FGOutputPresent() { fgOutputPresentCount++; }
+// Streamline can present real and generated frames from different threads.
+// Measure the actual output-present cadence, not the number of presents
+// observed between two (independently paced) menu frames.
+void MenuCommon::FGOutputPresent() { fgOutputPresentRate.Present(Util::MillisecondsNow()); }
 
-void MenuCommon::FGOutputPresents(bool presents) { fgOutputPresents = presents; }
+void MenuCommon::FGOutputPresents(bool presents) { fgOutputPresentRate.SetEnabled(presents); }
 
-static double FGOutputFrameTime(double now)
-{
-    if (!fgOutputPresents)
-    {
-        fgOutputPresentCount = 0;
-        fgOutputLastSample = 0.0;
-        fgOutputFrameTime = 0.0;
-        return 0.0;
-    }
-
-    if (fgOutputLastSample <= 0.0)
-    {
-        fgOutputPresentCount = 0;
-        fgOutputLastSample = now;
-        return 0.0;
-    }
-
-    if (auto count = fgOutputPresentCount.exchange(0); count > 0)
-    {
-        fgOutputFrameTime = (now - fgOutputLastSample) / count;
-        fgOutputLastSample = now;
-    }
-
-    return fgOutputFrameTime;
-}
+static double FGOutputFrameTime(double now) { return fgOutputPresentRate.FrameTime(now); }
 
 struct VersionCheckStatus
 {
@@ -1763,6 +1737,8 @@ struct MenuCommon::RenderMenuContext
     double now = 0.0;
     double frameTime = 0.0;
     double frameRate = 0.0;
+    // Current Vulkan FG output rate, kept separate from the long-term history.
+    double fgOutputFrameTimeMs = 0.0;
     float menuResScale = 1.0f;
     float fpsScale = 1.0f;
     float averageFrameTime = 0.0f;
@@ -1813,9 +1789,10 @@ void MenuCommon::UpdateRenderTiming(RenderMenuContext& ctx)
         frameRate = 1000.0 / frameTime;
     }
 
-    if (auto fgFrameTime = FGOutputFrameTime(now); fgFrameTime > 0.0)
+    ctx.fgOutputFrameTimeMs = FGOutputFrameTime(now);
+    if (ctx.fgOutputFrameTimeMs > 0.0)
     {
-        frameTime = fgFrameTime;
+        frameTime = ctx.fgOutputFrameTimeMs;
         frameRate = 1000.0 / frameTime;
     }
 
@@ -2224,6 +2201,15 @@ void MenuCommon::UpdateFrameTimeAverages(RenderMenuContext& ctx)
         frameTime /= frameCnt;
         frameRate = 1000.0 / frameTime;
         frameTimesCalculated = true;
+
+        // Vulkan FG output timing is already averaged across the last 125 ms.
+        // Use it directly for the current FPS readout; preserve the shared
+        // history for the separately labelled average and frame-time graph.
+        if (ctx.fgOutputFrameTimeMs > 0.0)
+        {
+            frameTime = ctx.fgOutputFrameTimeMs;
+            frameRate = 1000.0 / frameTime;
+        }
 
         float lastFT = static_cast<float>(state.frameTimes.empty() ? 0.0f : state.frameTimes.back());
         float lastUT = static_cast<float>(state.upscaleTimes.empty() ? 0.0f : state.upscaleTimes.back());
@@ -4705,16 +4691,18 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         ImGui::EndDisabled();
     }
 
-    if (ScopedCard::Shows("fg_reprojection") && fgOutput && fgOutput->HasReprojection())
+    if (auto reprojectionOutput = state.CurrentFG();
+        ScopedCard::Shows("fg_reprojection") && reprojectionOutput && reprojectionOutput->HasReprojection())
     {
         ScopedCard card { "Reprojection Settings" };
 
-        if (fgOutput->IsActive() && fgOutput->IsReprojectionActive())
+        if (reprojectionOutput->IsActive() && reprojectionOutput->IsReprojectionActive())
         {
             ImGui::Text("Updated camera rotation by: %.1fms",
-                        (float) fgOutput->GetLastTimeSinceSimStartNs() / 1'000'000.f);
+                        (float) reprojectionOutput->GetLastTimeSinceSimStartNs() / 1'000'000.f);
         }
-        else if (fgOutput->IsActive() && fgOutput->GetReproject() && fgOutput->GetReproject()->IsBypassed())
+        else if (reprojectionOutput->IsActive() && reprojectionOutput->GetReproject() &&
+                 reprojectionOutput->GetReproject()->IsBypassed())
         {
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "Paused, 3rd person detected");
         }
@@ -4802,7 +4790,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     "Edge fill mode is only used where the cache has nothing.\n"
                     "Shown with a blue tint in debug mode");
 
-        const auto reproject = fgOutput->GetReproject();
+        const auto reproject = reprojectionOutput->GetReproject();
         const bool hasMotionStats = reproject && reproject->HasMotionStats();
 
         bool parallaxAuto = config->ReprojectionParallaxAuto.value_or_default();
@@ -4825,7 +4813,8 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             ImGui::BeginDisabled();
             ImGui::SetNextItemWidth(parallaxSliderWidth);
             ImGui::SliderFloat("Cache parallax scale", &estimate, 0.0f, 10000.0f,
-                               estimate > 0.0f ? "%.1f" : (hasMotionStats ? "Estimating..." : "No motion vectors"),
+                               estimate > 0.0f ? "%.1f"
+                                               : (hasMotionStats ? "Estimating..." : "No usable motion vectors"),
                                ImGuiSliderFlags_Logarithmic);
             ImGui::EndDisabled();
         }
