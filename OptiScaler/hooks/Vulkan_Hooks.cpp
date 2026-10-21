@@ -13,6 +13,7 @@
 #include <framegen/ffx/FSRFG_Vk.h>
 #include <framegen/dlssg/DLSSG_Vk.h>
 #include <framegen/reprojection/Reprojection_Vk.h>
+#include <fsr4/FSR4DriverProviderVk.h>
 
 #include <misc/FrameLimit.h>
 #include <misc/DeferredRelease.h>
@@ -301,7 +302,11 @@ static IFGFeature_Vk* CreateFGFeature()
 
     if (state.activeFgOutput == FGOutput::FSRFG)
     {
-        if (FfxApiProxy::InitFfxVk())
+        // Driver provided ML FG works without amd_fidelityfx_vk.dll
+        bool sdkLoaded = FfxApiProxy::InitFfxVk();
+        bool driverLoaded = FSR4DriverProviderVk::InitFg();
+
+        if (sdkLoaded || driverLoaded)
             state.currentVkFG = new FSRFG_Vk();
         else
             LOG_ERROR("Can't load amd_fidelityfx_vk.dll, FSR FG won't be available");
@@ -346,13 +351,17 @@ static VkResult hkvkCreateWin32SurfaceKHR(VkInstance instance, const VkWin32Surf
 
     if (result == VK_SUCCESS && !State::Instance().vulkanSkipHooks)
     {
-        MenuOverlayVk::DestroyVulkanObjects(false);
-
         _instance = instance;
         State::Instance().VulkanInstance = instance;
         LOG_DEBUG("_instance captured: {0:X}", (UINT64) _instance);
-        _hwnd = pCreateInfo->hwnd;
-        LOG_DEBUG("_hwnd captured: {0:X}", (UINT64) _hwnd);
+
+        if (!MenuOverlayVk::OnOtherWindow(pCreateInfo->hwnd))
+        {
+            MenuOverlayVk::DestroyVulkanObjects(false);
+
+            _hwnd = pCreateInfo->hwnd;
+            LOG_DEBUG("_hwnd captured: {0:X}", (UINT64) _hwnd);
+        }
     }
 
     LOG_FUNC_RESULT(result);
@@ -925,7 +934,9 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
         _device = device;
         LOG_DEBUG("_device captured: {0:X}", (UINT64) _device);
 
-        MenuOverlayVk::CreateSwapchain(device, _PD, _instance, _hwnd, pCreateInfo, pAllocator, pSwapchain);
+        auto hwnd = VulkanHooks::SurfaceWindow(pCreateInfo->surface);
+        MenuOverlayVk::CreateSwapchain(device, _PD, _instance, hwnd != nullptr ? hwnd : _hwnd, pCreateInfo, pAllocator,
+                                       pSwapchain);
     }
 
     LOG_FUNC_RESULT(result);
